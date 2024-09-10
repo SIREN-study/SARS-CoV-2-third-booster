@@ -1,0 +1,445 @@
+---
+title: "Model results"
+author: "Peter Kirwan"
+date:   "`r Sys.Date()`"
+output:
+    html_document:
+        code_folding: hide
+        toc:          true
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+here::i_am("rmd/model_results.Rmd")
+
+library(dplyr)
+library(ggplot2)
+library(gt)
+library(here)
+library(msm)
+library(scales)
+library(survival)
+
+# load model results
+load(here("data/cox_models.RData"))
+load(here("data/msm_models.RData"))
+
+source(here("r/forest_plot.R"))
+
+# turn off scientific notation
+options(scipen = 999)
+
+# color palette
+pk_colours <- c(
+    "#881177", "#aa3355", "#cc6666",
+    "#ee9944", "#eedd00", "#99dd55",
+    "#44dd88", "#22ccbb", "#00bbcc",
+    "#0099cc", "#3366bb", "#663399"
+)
+```
+
+```{r forest-plots}
+forest_plot(msm_model_1, cox_fit = cox_model_1, covars = c("vaccine_short", "gender", "household"))
+
+ggsave(here("figures/model_comparison_1.png"), width = 7, height = 7)
+
+forest_plot(msm_model_2, cox_fit = cox_model_2, covars = c("vaccine", "gender", "household"))
+
+ggsave(here("figures/model_comparison_2.png"), width = 7, height = 5)
+
+forest_plot(msm_model_3, cox_fit = cox_model_3, covars = c("vaccine", "months_since_pos", "gender", "household"))
+
+ggsave(here("figures/model_comparison_3.png"), width = 7, height = 5)
+```
+
+```{r ve-plots}
+# define a plotting function
+ggplot_ve <- function(df, color) {
+    df |>
+        ggplot() +
+        aes(x = name, y = est, ymin = lower, ymax = upper) +
+        geom_hline(yintercept = 0) +
+        geom_point(size = 3, color = color) +
+        geom_errorbar(width = 0.2, color = color) +
+        scale_y_continuous(
+            expand = expansion(mult = c(0.05, 0.05)),
+            breaks = c(-0.25, 0, 0.25, 0.5, 0.75, 1),
+            labels = label_percent()
+        ) +
+        theme_minimal(14) +
+        theme(
+            # no vertical grid lines
+            panel.grid.major.x = element_blank(),
+            # no horizontal grid lines
+            panel.grid.major = element_line(colour = "grey", linetype = "dashed"),
+            panel.grid.minor = element_blank(),
+            # no legend title
+            legend.position = "none",
+            # space between x-axis and label
+            axis.title.x = element_text(margin = margin(t = 10))
+        )
+}
+
+p1 <- forest_plot(msm_model_1, table = TRUE, covars = "vaccine_short") |>
+    mutate(
+        est = 1 - est,
+        lower = 1 - lower,
+        upper = 1 - upper,
+        name = factor(name, levels = c("Waned third dose", "Fourth dose"))
+    ) |>
+    ggplot_ve(color = "#aa3355") +
+    labs(
+        x = "Vaccination status",
+        y = "Estimated relative VE"
+    ) +
+    coord_cartesian(ylim = c(-0.3, 1))
+
+p2 <- forest_plot(msm_model_2, table = TRUE, covars = "vaccine") |>
+    mutate(
+        est = 1 - est,
+        lower = 1 - lower,
+        upper = 1 - upper,
+        name = factor(name,
+            levels = c("Waned third dose", "Fourth dose 0-2 months", "Fourth dose 2-4 months", "Fourth dose 4+ months"),
+            labels = c("Waned third dose", "Fourth dose\n0-2 months", "Fourth dose\n2-4 months", "Fourth dose\n4-6 months")
+        )
+    ) |>
+    filter(name %in% c("Fourth dose\n0-2 months", "Fourth dose\n2-4 months", "Fourth dose\n4-6 months")) |>
+    ggplot_ve(color = "#aa3355") +
+    labs(
+        x = "Time since booster vaccination",
+        y = "Estimated relative VE"
+    ) +
+    coord_cartesian(ylim = c(-0.3, 1))
+
+p3 <- forest_plot(msm_model_3, table = TRUE, covars = "months_since_pos") |>
+    mutate(
+        est = 1 - est,
+        lower = 1 - lower,
+        upper = 1 - upper,
+        name = factor(name, levels = c("Confirmed naive", "2+ years", "1-2 years", "6-12 months", "0-6 months"))
+    ) |>
+    ggplot_ve(color = "#aa3355") +
+    labs(
+        x = "Time since previous infection",
+        y = "Estimated relative protection"
+    ) +
+    coord_cartesian(ylim = c(-0.3, 1))
+
+(p1 + p2 + plot_layout(widths = c(1, 2))) / p3 + plot_annotation(tag_levels = "A")
+
+ggsave(here("figures/ve_long.png"), height = 12, width = 10)
+```
+
+```{r vaccine-effectiveness-2}
+# present the marginal effect
+
+forest_plot(msm_model_4, table = TRUE, covars = "months_since_pos:vaccine_short") |>
+    mutate(
+        est = 1 - est,
+        lower = 1 - lower,
+        upper = 1 - upper,
+        name = gsub(":Fourth dose", "", name),
+        name = factor(name, levels = c("Confirmed naive", "2+ years", "1-2 years", "6-12 months", "0-6 months"))
+    ) |>
+    ggplot_ve(color = "#663399") |>
+    labs(
+        x = "Time since previous infection",
+        y = "Estimated relative VE"
+    ) +
+    coord_cartesian(ylim = c(-1, 1))
+
+ggsave(here("figures/ve_rel.png"), height = 6, width = 10)
+```
+
+# Symptomatic vaccine effectiveness
+
+```{r vaccine-effectiveness-6}
+# define a plotting function
+ggplot_sym <- function(df, color) {
+    df |>
+        ggplot() |>
+        aes(x = name, y = est, ymin = lower, ymax = upper, color = value_id) +
+        geom_hline(yintercept = 0) +
+        geom_point(size = 3, position = position_dodge(width = 0.5)) +
+        geom_errorbar(width = 0.2, position = position_dodge(width = 0.5)) +
+        labs(
+            color = ""
+        ) +
+        scale_y_continuous(
+            expand = expansion(mult = c(0.05, 0.05)),
+            breaks = c(-1.5, -1, -0.5, 0, 0.5, 1),
+            labels = label_percent()
+        ) +
+        coord_cartesian(ylim = c(-1.5, 1)) +
+        theme_minimal(14) +
+        theme(
+            # no vertical grid lines
+            panel.grid.major.x = element_blank(),
+            # no horizontal grid lines
+            panel.grid.major.y = element_line(colour = "grey", linetype = "dashed"),
+            panel.grid.minor = element_blank(),
+            # no legend title
+            legend.position = "none",
+            # space between x-axis and label
+            axis.title.x = element_text(margin = margin(t = 10))
+        ) +
+        scale_color_manual(
+            values = rev(pk_colours[seq(1, length(pk_colours), 6)]),
+            label = c("COVID symptoms", "Non-COVID symptoms or asymptomatic")
+        )
+}
+
+p1 <- forest_plot(msm_model_5, table = TRUE, transition2 = "State 1 - State 3", covars = "vaccine_short") |>
+    mutate(
+        est = 1 - est,
+        lower = 1 - lower,
+        upper = 1 - upper,
+        name = factor(name, levels = c("Waned third dose", "Fourth dose"))
+    ) |>
+    ggplot_sym() +
+    labs(
+        x = "Vaccination status",
+        y = "Estimated relative VE"
+    )
+
+p2 <- forest_plot(msm_model_6, table = TRUE, transition2 = "State 1 - State 3", covars = "vaccine") |>
+    mutate(
+        est = 1 - est,
+        lower = 1 - lower,
+        upper = 1 - upper,
+        name = factor(name,
+            levels = c("Waned third dose", "Fourth dose 0-2 months", "Fourth dose 2-4 months", "Fourth dose 4+ months"),
+            labels = c("Waned third dose", "Fourth dose\n0-2 months", "Fourth dose\n2-4 months", "Fourth dose\n4-6 months")
+        )
+    ) |>
+    ggplot_sym() +
+    labs(
+        x = "Time since booster vaccination",
+        y = "Estimated relative VE"
+    )
+
+p3 <- forest_plot(msm_model_7, table = TRUE, transition2 = "State 1 - State 3", covars = "months_since_pos") |>
+    mutate(
+        est = 1 - est,
+        lower = 1 - lower,
+        upper = 1 - upper,
+        name = factor(name, levels = c("Confirmed naive", "2+ years", "1-2 years", "6-12 months", "0-6 months"))
+    ) |>
+    ggplot_sym() +
+    labs(
+        x = "Time since previous infection",
+        y = "Estimated relative protection",
+    )
+
+(p1 + p2 + plot_layout(widths = c(1, 2))) / p3 + plot_annotation(tag_levels = "A")
+
+ggsave(here("figures/ve_sym.png"), height = 12, width = 10)
+```
+
+```{r model-diagnostics-2}
+study_ids <- siren_df_interim4 |>
+    select(study_id, state, time, specimen_date, months_since_pos) |>
+    filter(state != 99, specimen_date >= start_date) |>
+    add_count(study_id) |>
+    filter(n > 1) |>
+    distinct()
+
+siren_df <- siren_df_interim4 |>
+    filter(
+        study_id %in% study_ids$study_id,
+        state != 99,
+        specimen_date >= start_date
+    ) |>
+    mutate(
+        monthyear = fct_drop(monthyear),
+        prev_var = fct_drop(prev_var)
+    )
+
+# compare the diagnostics of the most complete model
+diagnostics <- model_results(msm_model_3,
+    dataset = siren_df,
+    mintime = 0,
+    timezero = 0,
+    maxtime = 28.571428571428,
+    piecewise.times = c(2.71428571428571, 7.14285714285714, 11.4285714285714, 15.8571428571429, 20.2857142857143, 24.2857142857143),
+    piecewise.covariates = list(
+        list(monthyear = "Sep 2022"),
+        list(monthyear = "Oct 2022"),
+        list(monthyear = "Nov 2022"),
+        list(monthyear = "Dec 2022"),
+        list(monthyear = "Jan 2023"),
+        list(monthyear = "Feb 2023"),
+        list(monthyear = "Mar 2023")
+    )
+)
+
+diagnostics$fig1 + theme(legend.position = "top")
+
+ggsave(here("figures/expected_observed.png"), width = 7, height = 5)
+```
+
+```{r sojourn-time}
+
+sojourn.msm(msm_model_3)$estimates[2] * 7
+sojourn.msm(msm_model_3)$L[2] * 7
+sojourn.msm(msm_model_3)$U[2] * 7
+
+sojourn.msm(msm_model_3)
+
+# sojorn time for waned third dose
+covlist <- list(`vaccine_shortFourth dose` = -0.5947409)
+S1 <- sojourn.msm(msm_model_3)
+
+# sojorn time for fourth dose
+covlist <- list(`vaccine_shortFourth dose` = 1 - 0.5947409)
+S2 <- sojourn.msm(msm_model_3)
+
+# sojorn time for 2+ years, waned third dose
+covlist <- list(
+    `months_since_pos1-2 years` = -0.1472338,
+    `months_since_pos6-12 months` = -0.3529958,
+    `months_since_pos0-6 months` = -0.2316094,
+    `months_since_posConfirmed naive` = -0.1055653
+)
+S3 <- sojourn.msm(msm_model_3)
+
+# sojorn time for 1-2 years, waned third dose
+covlist <- list(
+    `months_since_pos1-2 years` = 1 - 0.1472338,
+    `months_since_pos6-12 months` = -0.3529958,
+    `months_since_pos0-6 months` = -0.2316094,
+    `months_since_posConfirmed naive` = -0.1055653
+)
+S4 <- sojourn.msm(msm_model_3)
+
+# sojorn time for 6-12 mo, waned third dose
+covlist <- list(
+    `months_since_pos1-2 years` = -0.1472338,
+    `months_since_pos6-12 months` = 1 - 0.3529958,
+    `months_since_pos0-6 months` = -0.2316094,
+    `months_since_posConfirmed naive` = -0.1055653
+)
+S5 <- sojourn.msm(msm_model_3)
+
+# sojorn time for 0-6mo, waned third dose
+covlist <- list(
+    `months_since_pos1-2 years` = -0.1472338,
+    `months_since_pos6-12 months` = -0.3529958,
+    `months_since_pos0-6 months` = 1 - 0.2316094,
+    `months_since_posConfirmed naive` = -0.1055653
+)
+S6 <- sojourn.msm(msm_model_3)
+
+# sojorn time for naive, waned third dose
+covlist <- list(
+    `months_since_pos1-2 years` = -0.1472338,
+    `months_since_pos6-12 months` = -0.3529958,
+    `months_since_pos0-6 months` = -0.2316094,
+    `months_since_posConfirmed naive` = 1 - 0.1055653
+)
+S7 <- sojourn.msm(msm_model_3)
+
+# sojorn time for symptomatic
+S8 <- sojourn.msm(msm_model_7)
+
+# table with sojourn times for each category
+# multiply by 7 to convert weeks to days
+sojourn_times <- tibble(
+    cat = c("Waned third dose", "Fourth dose", "2+ years", "1-2 years", "6-12 months", "0-6 months", "Confirmed naive", "COVID symptoms", "Non-COVID symptoms\nor asymptomatic"),
+    sojourn = c(S1$estimates[2] * 7, S2$estimates[2] * 7, S3$estimates[2] * 7, S4$estimates[2] * 7, S5$estimates[2] * 7, S6$estimates[2] * 7, S7$estimates[2] * 7, S8$estimates[2] * 7, S8$estimates[3] * 7),
+    lower = c(S1$L[2] * 7, S2$L[2] * 7, S3$L[2] * 7, S4$L[2] * 7, S5$L[2] * 7, S6$L[2] * 7, S7$L[2] * 7, S8$L[2] * 7, S8$L[3] * 7),
+    upper = c(S1$U[2] * 7, S2$U[2] * 7, S3$U[2] * 7, S4$U[2] * 7, S5$U[2] * 7, S6$U[2] * 7, S7$U[2] * 7, S8$U[2] * 7, S8$U[3] * 7)
+) |>
+    mutate(
+        cat = factor(cat, levels = c("Waned third dose", "Fourth dose", "Confirmed naive", "2+ years", "1-2 years", "6-12 months", "0-6 months", "COVID symptoms", "Non-COVID symptoms\nor asymptomatic"))
+    )
+
+```
+
+```{r sojourn-plots}
+
+# define a plotting function
+ggplot_soj <- function(df, color) {
+df |>
+aes(x = cat, y = sojourn, ymin = lower, ymax = upper) +
+    geom_hline(yintercept = 0) +
+    geom_point(size = 3, color = color) +
+    geom_errorbar(width = 0.2, color = color) +
+    labs(
+        x = "Vaccination status",
+        y = "Estimated time spent in PCR positive state (days)",
+        fill = ""
+    ) +
+    scale_x_discrete(
+        limits = rev
+    ) +
+    scale_y_continuous(
+        expand = expansion(mult = c(0.05, 0.05)),
+        breaks = c(3, 5, 7, 9, 11, 13)
+    ) +
+    coord_flip(ylim = c(3.2, 13)) +
+    theme_minimal(14) +
+    theme(
+        # no vertical grid lines
+        panel.grid.major.y = element_blank(),
+        # no horizontal grid lines
+        panel.grid.major.x = element_line(colour = "grey", linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        # no legend title
+        legend.position = "none",
+        # space between x-axis and label
+        axis.title.y = element_text(margin = margin(r = 10, l = 10)),
+        axis.title.x = element_text(margin = margin(t = 10))
+    )
+}
+
+p1 <- sojourn_times |>
+    filter(cat %in% c("Waned third dose", "Fourth dose")) |>
+    ggplot_soj(color = "#aa3355")
+
+p2 <- sojourn_times |>
+    filter(cat %in% c("Confirmed naive", "2+ years", "1-2 years", "6-12 months", "0-6 months", "Naive")) |>
+    ggplot_soj(color = "#0099cc")
+
+p3 <- sojourn_times |>
+    filter(cat %in% c("COVID symptoms", "Non-COVID symptoms\nor asymptomatic")) |>
+    ggplot() +
+    aes(x = cat, y = sojourn, ymin = lower, ymax = upper, color = cat) +
+    geom_hline(yintercept = 0) +
+    geom_point(size = 3) +
+    geom_errorbar(width = 0.2) +
+    labs(
+        x = "Symptom status",
+        y = "Estimated time spent in PCR positive state (days)",
+        fill = ""
+    ) +
+    scale_x_discrete(
+        limits = rev
+    ) +
+    scale_y_continuous(
+        expand = expansion(mult = c(0.05, 0.05)),
+        breaks = c(3, 5, 7, 9, 11, 13)
+    ) +
+    coord_flip(ylim = c(3.2, 13)) +
+    theme_minimal(14) +
+    theme(
+        # no vertical grid lines
+        panel.grid.major.y = element_blank(),
+        # no horizontal grid lines
+        panel.grid.major.x = element_line(colour = "grey", linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        # no legend title
+        legend.position = "none",
+        # space between x-axis and label
+        axis.title.y = element_text(margin = margin(r = 10, l = 10)),
+        axis.title.x = element_text(margin = margin(t = 10))
+    ) +
+    scale_color_manual(
+        values = rev(pk_colours[seq(1, length(pk_colours), 6)]),
+        label = c("COVID symptoms", "Non-COVID symptoms or asymptomatic")
+    )
+
+p1 / p2 / p3 + plot_layout(heights = c(1, 2, 1)) + plot_annotation(tag_levels = "A")
+
+ggsave(here("figures/sojourn_time.png"), height = 10, width = 10)
+```

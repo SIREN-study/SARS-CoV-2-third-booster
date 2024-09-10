@@ -1,0 +1,253 @@
+---
+title: "Figures and tables"
+author: "Peter Kirwan"
+date:   "`r Sys.Date()`"
+output:
+    html_document:
+        code_folding: hide
+        toc:          true
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+here::i_am("rmd/figures_and_tables.Rmd")
+
+library(dplyr)
+library(ggplot2)
+library(here)
+library(patchwork)
+library(scales)
+library(tidyr)
+
+# color palette
+pk_colours <- c(
+    "#881177", "#aa3355", "#cc6666",
+    "#ee9944", "#eedd00", "#99dd55",
+    "#44dd88", "#22ccbb", "#00bbcc",
+    "#0099cc", "#3366bb", "#663399"
+)
+
+# load the processed data
+load(here("data/processed_data.RData"))
+load(here("data/split_data.RData"))
+```
+
+# Figures
+
+## Symptoms figure
+    
+```{r symptoms-figure}
+p1 <- siren_df_interim4 |>
+    filter(
+        episode_start >= as_date("2022-09-12") & !is.na(infection_date_1),
+        !is.na(covid_symptoms),
+    ) |>
+    arrange(study_id, specimen_date) |>
+    distinct(study_id, episode_start, episode_end, .keep_all = TRUE) |>
+    mutate(
+        covid_symptoms = if_else(covid_symptoms %in% c("Asymptomatic", "Other symptoms"), "Non-COVID symptoms or asymptomatic", covid_symptoms),
+        covid_symptoms = factor(covid_symptoms, levels = c("Non-COVID symptoms or asymptomatic", "COVID symptoms"))
+    ) |>
+    ggplot() +
+    aes(vaccine_short, fill = covid_symptoms) +
+    geom_bar(stat = "count", position = position_fill()) +
+    labs(
+        y = "",
+        x = "Vaccination status",
+        fill = ""
+    ) +
+    scale_y_continuous(
+        labels = label_percent(),
+        expand = expansion(mult = c(0, 0))
+    ) +
+    theme_minimal(14) +
+    scale_fill_manual(values = pk_colours[seq(1, length(pk_colours), 6)]) +
+    guides(fill = guide_legend(reverse = T)) +
+    theme(
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.title.x = element_text(margin = margin(t = 10))
+    )
+
+p2 <- siren_df_interim4 |>
+    filter(
+        episode_start >= as_date("2022-09-12") & !is.na(infection_date_1),
+        !is.na(covid_symptoms)
+    ) |>
+    arrange(study_id, specimen_date) |>
+    distinct(study_id, episode_start, episode_end, .keep_all = TRUE) |>
+    filter(months_since_pos != "No evidence of infection") |>
+    mutate(
+        months_since_pos = factor(months_since_pos, labels = c("2+\nyears", "1-2\nyears", "6-12\nmonths", "0-6\nmonths", "Confirmed\nnaive")),
+        months_since_pos = fct_relevel(months_since_pos, "Confirmed\nnaive"),
+        covid_symptoms = if_else(covid_symptoms %in% c("Asymptomatic", "Other symptoms"), "Non-COVID symptoms or asymptomatic", covid_symptoms),
+        covid_symptoms = factor(covid_symptoms, levels = c("Non-COVID symptoms or asymptomatic", "COVID symptoms"))
+    ) |>
+    ggplot() +
+    aes(months_since_pos, fill = covid_symptoms) +
+    geom_bar(stat = "count", position = position_fill()) +
+    labs(
+        y = "",
+        x = "Time since previous infection",
+        fill = ""
+    ) +
+    scale_y_continuous(
+        labels = label_percent(),
+        expand = expansion(mult = c(0, 0))
+    ) +
+    theme_minimal(14) +
+    scale_fill_manual(values = pk_colours[seq(1, length(pk_colours), 6)]) +
+    guides(fill = guide_legend(reverse = T)) +
+    theme(
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.title.x = element_text(margin = margin(t = 10))
+    )
+
+p1 + p2 + plot_layout(widths = c(1, 2), guides = "collect") & theme(legend.position = "top")
+
+ggsave(here("figures/symptoms.png"), height = 6, width = 10)
+```
+
+## Exposure figure
+
+```{r exposure-figure}
+siren_split |>
+    group_by(monthyear) |>
+    summarise(
+        particiants = n_distinct(substr(study_id, 1, 8)),
+        events = sum(event),
+        exposure = sum(tstop - tstart) * 7,
+        incidence = events / exposure * 10000,
+        lower = pois.exact(x = events, pt = exposure, conf.level = 0.95)$lower * 10000,
+        upper = pois.exact(x = events, pt = exposure, conf.level = 0.95)$upper * 10000
+    ) |>
+    ggplot() +
+    aes(x = monthyear, y = exposure, fill = "red") +
+    geom_col() +
+    labs(
+        x = "",
+        y = "Exposure (days)",
+        title = ""
+    ) +
+    theme_minimal(14) +
+    theme(
+        legend.position = "none",
+        axis.title.y = element_text(margin = margin(0, 10, 0, 0)),
+        panel.grid.major.x = element_blank()
+    ) +
+    # add the incidence rate as a point on a separate axis
+    geom_point(
+        aes(y = incidence * 10000),
+        color = "black",
+        size = 3
+    ) +
+    scale_y_continuous(
+        expand = expansion(mult = c(0, 0.05)),
+        labels = comma,
+        sec.axis = sec_axis(~ . / 10000, name = "PCR positivity rate (per 10,000 person-days)")
+    ) +
+    # add the confidence intervals as error bars
+    geom_errorbar(
+        aes(ymin = lower * 10000, ymax = upper * 10000),
+        width = 0.2,
+        color = "black"
+    )
+
+ggsave(here("figures/exposure.png"), height = 6, width = 10)
+```
+
+# Tables
+
+## Demographic table
+
+```{r demography-table}
+t1 <- siren_df_interim4 |>
+    arrange(study_id, specimen_date) |>
+    mutate(
+        months_since_pos = fct_drop(months_since_pos)
+    ) |>
+    distinct(study_id, .keep_all = TRUE) |>
+    select(gender, agegr, ethnicity, medical_group, staff_type, occupation_setting, patient_contact, imd, region, months_since_pos, household) |>
+    tbl_summary(
+        type = everything() ~ "categorical",
+        percent = "col",
+        by = months_since_pos
+    ) |>
+    add_overall() |>
+    add_p() |>
+    as_tibble()
+```
+
+## Crude incidence tables and plots
+
+```{r incidence-demography}
+# demography of those with positive tests
+t1_pos <- siren_df_interim4 |>
+    filter(!is.na(infection_date_1)) |>
+    distinct(study_id, eligible, gender, agegr, ethnicity, medical_group, staff_type, occupation_setting, patient_contact, imd, region, household) |>
+    select(-study_id) |>
+    tbl_summary(
+        type = everything() ~ "categorical",
+        percent = "col"
+    ) |>
+    as_tibble()
+
+compute_inc <- function(df = siren_split, var) {
+    incidence_table <- df |>
+        group_by(!!var) |>
+        summarise(
+            particiants = n_distinct(substr(study_id, 1, 8)),
+            events = sum(event),
+            exposure = sum(tstop - tstart) * 7,
+            incidence = events / exposure * 10000,
+            lower = pois.exact(x = events, pt = exposure, conf.level = 0.95)$lower * 10000,
+            upper = pois.exact(x = events, pt = exposure, conf.level = 0.95)$upper * 10000
+        ) |>
+        as_tibble() |>
+        rename(Characteristic = !!var)
+    return(incidence_table)
+}
+
+# compute incidence for each variable
+# eligible gives all participants
+t1_inc <- bind_rows(
+    compute_inc(var = quo(eligible)) |> mutate(Characteristic = as.character(Characteristic)),
+    compute_inc(var = quo(region)),
+    compute_inc(var = quo(agegr)),
+    compute_inc(var = quo(gender)),
+    compute_inc(var = quo(ethnicity)),
+    compute_inc(var = quo(staff_type)),
+    compute_inc(var = quo(occupation_setting)),
+    compute_inc(var = quo(patient_contact)),
+    compute_inc(var = quo(medical_group)),
+    compute_inc(var = quo(imd)),
+    compute_inc(var = quo(household)),
+    compute_inc(var = quo(vaccine_short)),
+    compute_inc(var = quo(months_since_pos)),
+    compute_inc(var = quo(monthyear))
+)
+```
+
+# Empirical time spent in positive state
+
+```{r empirical-time-positive}
+# empirical time spent in positive state
+emp_time <- function(df = siren_df_interim4, var) {
+    emp_time <- df |>
+        filter(episode_start >= as_date("2022-09-12") & !is.na(infection_date_1)) |>
+        arrange(study_id, specimen_date) |>
+        distinct(study_id, episode_start, episode_end, .keep_all = TRUE) |>
+        mutate(time_pos = episode_end - episode_start) |>
+        group_by(!!var) |>
+        summarise(
+            median = median(time_pos, na.rm = TRUE),
+            lower = quantile(time_pos, 0.25, na.rm = TRUE),
+            upper = quantile(time_pos, 0.75, na.rm = TRUE)
+        )
+    return(emp_time)
+}
+
+emp_time(var = quo(months_since_pos))
+emp_time(var = quo(vaccine_short))
+emp_time(var = quo(covid_symptoms))
+```
